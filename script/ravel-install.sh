@@ -58,7 +58,7 @@ expected=$(awk '{name=toupper($1); gsub(/=/,"",name); if(name=="SHA256" || name=
 [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { printf '%s\n' 'Invalid SHA-256 digest.' >&2; exit 1; }
 actual=$(sha256sum "$stage/release.zip"); actual=${actual%% *}
 [[ "$actual" == "$expected" ]] || { printf '%s\n' 'Release digest mismatch.' >&2; exit 1; }
-for entry in ravel ravel.sh geoip.dat geosite.dat LICENSE NOTICE; do
+for entry in ravel ravel.sh install.sh geoip.dat geosite.dat LICENSE NOTICE; do
     unzip -p "$stage/release.zip" "$entry" > "$stage/$entry"
     [[ -s "$stage/$entry" ]] || exit 1
 done
@@ -138,6 +138,8 @@ find "$config_directory" -type f -exec chmod 600 {} +
 install -m 755 "$stage/ravel" "$directory/ravel.new"
 mv -f "$directory/ravel.new" "$directory/ravel"
 install -m 755 "$stage/ravel.sh" /usr/local/bin/ravel
+install -m 755 "$stage/install.sh" "$directory/install.sh.new"
+mv -f "$directory/install.sh.new" "$directory/install.sh"
 install -m 644 "$stage/geoip.dat" "$stage/geosite.dat" "$stage/LICENSE" "$stage/NOTICE" "$directory/"
 if [[ $migrate == 1 ]]; then
     if [[ $manager == openrc ]]; then

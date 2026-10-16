@@ -44,6 +44,8 @@ ravel server -c /etc/ravel/config.enc.json
 
 已有安装使用 `bash ravel-install.sh --migrate` 显式迁移。迁移先备份旧配置及服务文件，不删除旧文件；普通安装不会自动接管旧服务。升级到新客户端前需要先发布面板的 `ravelConfig` 接口和 `node_type=ravel` 兼容入口。仅有本地源码不代表独立 GitHub 仓库或发布包已经上线。
 
+安装后使用 `ravel start/stop/restart/status/log` 管理服务，`ravel update --version vX.Y.Z` 通过本机保存的可信安装器更新。机器 Token 只在首次安装时隐藏输入，自动部署使用 `--token-stdin`，不要放进命令参数。
+
 Ravel 同步会将 `_BunCloudManagedNodes` 托管身份与 `Nodes` 一起写入加密配置，
 通过同一次原子替换提交；普通节点配置加载器忽略该附加字段。
 旧 `managed-nodes.json` 仍作为兼容副本维护，但新版不再依赖它与配置同时写入。

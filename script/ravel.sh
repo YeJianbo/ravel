@@ -21,8 +21,12 @@ case "${1:-help}" in
         if [[ -d /run/openrc ]]; then exec tail -n 100 -f /var/log/ravel.log; fi
         exec journalctl -u ravel.service -n 100 -f
         ;;
+    update)
+        shift
+        exec bash /usr/local/ravel/install.sh "$@"
+        ;;
     *)
-        printf '%s\n' 'Ravel: start | stop | restart | status | enable | disable | log | version | config | server'
+        printf '%s\n' 'Ravel: start | stop | restart | status | enable | disable | log | update | version | config | server'
         printf '%s\n' 'Managed runtime: /usr/local/ravel/ravel run'
         ;;
 esac
