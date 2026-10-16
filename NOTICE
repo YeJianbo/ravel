@@ -1,0 +1,8 @@
+Ravel runtime
+
+This work includes code derived from wyx2685/v2node and uses Xray-core.
+The covered source remains available under the Mozilla Public License 2.0;
+see LICENSE and the notices in individual source files.
+
+Ravel/1 and GOST are separate components with their own licenses.
+Independent product naming does not remove upstream copyright or attribution.

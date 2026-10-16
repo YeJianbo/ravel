@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package ravel.core.app.dispatcher;
+option csharp_namespace = "Ravel.core.app.dispatcher";
+option go_package = "github.com/YeJianbo/ravel/core/app/dispatcher";
+option java_package = "com.ravel.core.app.dispatcher";
+option java_multiple_files = true;
+
+message SessionConfig {
+  reserved 1;
+}
+
+message Config {
+  SessionConfig settings = 1;
+}
