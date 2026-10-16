@@ -103,6 +103,8 @@ func CollectStatus(nodeCount int) map[string]any {
 	status := collectStaticStatus()
 	status["version"] = "ravel " + runtimeVersion
 	status["ravel_version"] = runtimeVersion
+	status["runtime_kind"] = "ravel"
+	status["runtime_protocol"] = protocol
 	status["managed_nodes"] = nodeCount
 	status["ravel_status"] = "active"
 	nodeHealthState.RLock()

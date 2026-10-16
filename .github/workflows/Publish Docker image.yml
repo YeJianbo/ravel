@@ -73,6 +73,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          build-args: VERSION=${{ github.event.release.tag_name || github.sha }}
           build-contexts: ravel_core=./.ravel-core
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}

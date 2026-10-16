@@ -5,7 +5,7 @@ umask 077
 readonly repo=YeJianbo/ravel
 readonly directory=/usr/local/ravel
 readonly config_directory=/etc/ravel
-version= panel= machine_id= migrate=0 token_stdin=0 bundle=
+version= panel= machine_id= migrate=0 token_stdin=0 enroll_stdin=0 bundle=
 while (($#)); do
     case "$1" in
         --version) version=${2:?}; shift 2 ;;
@@ -13,8 +13,9 @@ while (($#)); do
         --machine-id) machine_id=${2:?}; shift 2 ;;
         --bundle) bundle=${2:?}; shift 2 ;;
         --token-stdin) token_stdin=1; shift ;;
+        --enroll-token-stdin) enroll_stdin=1; shift ;;
         --migrate) migrate=1; shift ;;
-        --help) printf '%s\n' 'ravel-install.sh [--version vX.Y.Z] [--panel https://panel --machine-id ID] [--token-stdin] [--migrate] [--bundle FILE]'; exit 0 ;;
+        --help) printf '%s\n' 'ravel-install.sh [--version vX.Y.Z] [--panel https://panel --machine-id ID] [--token-stdin | --enroll-token-stdin] [--migrate] [--bundle FILE]'; exit 0 ;;
         *) printf 'Unknown option: %s\n' "$1" >&2; exit 1 ;;
     esac
 done
@@ -22,8 +23,11 @@ done
 for tool in curl jq unzip sha256sum install; do command -v "$tool" >/dev/null || { printf 'Missing dependency: %s\n' "$tool" >&2; exit 1; }; done
 [[ -z "$version" || "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || exit 1
 if [[ -n "$panel" || -n "$machine_id" ]]; then
-    [[ "$panel" =~ ^https://[^/@?#[:space:]]+(/[^?#[:space:]]*)?$ && "$machine_id" =~ ^[1-9][0-9]*$ ]] || { printf '%s\n' 'Require HTTPS panel and positive machine ID.' >&2; exit 1; }
+    [[ "$panel" =~ ^https://[^/@?#[:space:]]+(/[^?#[:space:]]*)?$ ]] || { printf '%s\n' 'Require HTTPS panel.' >&2; exit 1; }
+    [[ "$machine_id" =~ ^[1-9][0-9]*$ || ( $enroll_stdin == 1 && -z "$machine_id" ) ]] || { printf '%s\n' 'Require positive machine ID or enrollment.' >&2; exit 1; }
 fi
+[[ ! ( $enroll_stdin == 1 && $token_stdin == 1 ) ]] || exit 1
+[[ $enroll_stdin == 0 || -n "$panel" ]] || exit 1
 if [[ -d /run/openrc ]] && command -v rc-service >/dev/null; then manager=openrc
 elif command -v systemctl >/dev/null; then manager=systemd
 else printf '%s\n' 'Require systemd or OpenRC.' >&2; exit 1; fi
@@ -81,7 +85,17 @@ if [[ $migrate == 1 ]]; then
 elif [[ -d "$config_directory" ]]; then
     cp -a "$config_directory/." "$stage/config/"
 fi
-if [[ -n "$panel" ]]; then
+if [[ $enroll_stdin == 1 ]]; then
+    IFS= read -r token || [[ -n ${token:-} ]]
+    token=${token%$'\r'}
+    [[ ${#token} -ge 16 && ${#token} -le 512 ]] || { printf '%s\n' 'Invalid enrollment token.' >&2; exit 1; }
+    printf '%s' "$token" > "$stage/enroll-token"
+    unset token
+    jq -n --arg name "$(hostname)" --arg id "$machine_id" --rawfile token "$stage/enroll-token" '{enroll_token:$token,name:$name} + (if $id=="" then {} else {machine_id:($id|tonumber)} end)' > "$stage/enroll-request.json"
+    curl --fail --silent --show-error --proto '=https' --max-time 30 -H 'Content-Type: application/json' --data-binary "@$stage/enroll-request.json" "${panel%/}/api/v1/server/machine/enroll" > "$stage/enroll-response.json"
+    jq -e '.data.machine_id>0 and (.data.api_token|type=="string" and length>=16)' "$stage/enroll-response.json" >/dev/null
+    jq --arg panel "${panel%/}" '{panel_url:$panel,machine_id:.data.machine_id,machine_token:.data.api_token,protocol:"ravel-v1",sync_interval:30,status_interval:120}' "$stage/enroll-response.json" > "$stage/config/state.json"
+elif [[ -n "$panel" ]]; then
     if [[ $token_stdin == 1 ]]; then IFS= read -r token || [[ -n ${token:-} ]]
     else IFS= read -r -s -p 'Machine token: ' token; printf '\n'; fi
     token=${token%$'\r'}

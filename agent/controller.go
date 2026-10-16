@@ -46,15 +46,17 @@ type NodeConfig struct {
 }
 
 type ConfigResponse struct {
-	Data           *[]NodeConfig `json:"data"`
-	ConfigRevision string        `json:"config_revision"`
-	ConfigSchema   int           `json:"config_schema"`
-	Authoritative  bool          `json:"authoritative"`
-	RestartToken   string        `json:"restart_node_token"`
-	Probe          *ProbeConfig  `json:"probe"`
+	Data           *[]NodeConfig  `json:"data"`
+	ConfigRevision string         `json:"config_revision"`
+	ConfigSchema   int            `json:"config_schema"`
+	Authoritative  bool           `json:"authoritative"`
+	RestartToken   string         `json:"restart_node_token"`
+	Runtime        *RuntimeConfig `json:"runtime"`
 }
 
-type ProbeConfig struct {
+type RuntimeConfig struct {
+	Kind           string               `json:"kind"`
+	Protocol       string               `json:"protocol"`
 	AutoUpdate     AutoUpdateConfig     `json:"auto_update"`
 	Relay          *RelayConfig         `json:"relay"`
 	NetworkQuality NetworkQualityConfig `json:"network_quality"`
@@ -125,28 +127,31 @@ func (c *Controller) SyncContext(ctx context.Context) (bool, int, error) {
 	if response.Data == nil {
 		return false, 0, fmt.Errorf("panel response omitted managed node data")
 	}
-	if response.Probe == nil || response.Probe.Relay == nil {
+	if response.Runtime == nil || response.Runtime.Relay == nil {
 		return false, len(*response.Data), fmt.Errorf("panel response omitted relay configuration")
+	}
+	if response.Runtime.Kind != "ravel" || response.Runtime.Protocol != protocol {
+		return false, len(*response.Data), fmt.Errorf("panel returned an incompatible runtime protocol")
 	}
 	desired := *response.Data
 	revision := strings.TrimSpace(response.ConfigRevision)
 	if revision == "" {
-		revision = configRevision(desired, *response.Probe.Relay)
+		revision = configRevision(desired, *response.Runtime.Relay)
 	}
 	revisionChanged := c.setDesiredRevision(revision)
 
 	relayChanged := false
 	if c.Relay != nil {
 		var err error
-		relayChanged, err = c.Relay.SyncContext(ctx, *response.Probe.Relay)
+		relayChanged, err = c.Relay.SyncContext(ctx, *response.Runtime.Relay)
 		if err != nil {
 			c.MarkConfigApply("failed", err.Error())
 			return false, len(desired), fmt.Errorf("apply relay configuration: %w", err)
 		}
 	}
-	c.setNetworkQualityConfig(response.Probe.NetworkQuality)
-	c.setAutoUpdateConfig(response.Probe.AutoUpdate)
-	c.setRuntimeTask(response.Probe.RuntimeTask)
+	c.setNetworkQualityConfig(response.Runtime.NetworkQuality)
+	c.setAutoUpdateConfig(response.Runtime.AutoUpdate)
+	c.setRuntimeTask(response.Runtime.RuntimeTask)
 	nodeConfigChanged, err := c.writeMergedConfig(desired)
 	if err != nil {
 		if !errors.Is(err, errConfigChangedDuringSync) {

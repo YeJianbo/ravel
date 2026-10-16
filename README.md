@@ -42,7 +42,7 @@ ravel server -c /etc/ravel/config.enc.json
 
 机器模式使用 `ravel run`，默认配置位于 `/etc/ravel`，程序位于 `/usr/local/ravel/ravel`，服务名为 `ravel`。密钥可以通过 `RAVEL_CONFIG_KEY_FILE` 指定文件，避免放进服务参数。
 
-已有安装使用 `bash ravel-install.sh --migrate` 显式迁移。迁移先备份旧配置及服务文件，不删除旧文件；普通安装不会自动接管旧服务。升级到新客户端前需要先发布面板的 `ravelConfig` 接口和 `node_type=ravel` 兼容入口。仅有本地源码不代表独立 GitHub 仓库或发布包已经上线。
+已有安装使用 `bash ravel-install.sh --migrate` 显式迁移。迁移先备份旧配置及服务文件，不删除旧文件；普通安装不会自动接管旧服务。BunCloud 同时支持旧入口和新的 `ravelConfig`、`node_type=ravel` 接口，新接口使用 `runtime` 配置段，不改 VLESS/VMess 等节点协议。
 
 安装后使用 `ravel start/stop/restart/status/log` 管理服务，`ravel update --version vX.Y.Z` 通过本机保存的可信安装器更新。机器 Token 只在首次安装时隐藏输入，自动部署使用 `--token-stdin`，不要放进命令参数。
 
@@ -63,10 +63,7 @@ Ravel 的面板请求只允许升级或保持同版本，不允许远程降级�
 已下载的正式版本继续使用现有摘要校验和升级失败回滚；本机管理员主动恢复上一版本的机制保留。
 该边界不防护可信 GitHub 仓库或发布流程本身失陷，也不等于机器已安装新版。
 
-探针拨测不直接运行面板提供的完整 sing-box 配置，而是按现有协议字段重建本机配置。
-日志、DNS、监听和路由由本机固定生成，禁止出站引用本机文件或添加未知功能。
-拨测目标固定为 Cloudflare 的连通性检查地址，单次请求时长最多 30 秒，编码配置最多 87384 字节。
-节点地址仍是面板管理的数据，该限制不隔离节点网络访问，也不替代进程权限隔离。
+运行时上报 `runtime_kind=ravel`、`runtime_protocol=ravel-v1`、`ravel_version` 和 `ravel_status`。BunCloud 根据已认证的运行时身份选择版本仓库，旧 v2node 不会被自动切换到 Ravel 仓库。
 
 ## 网络质量采集
 

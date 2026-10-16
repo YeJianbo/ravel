@@ -18,7 +18,7 @@ func TestSyncRejectsMissingManagedNodeData(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	controller := newSyncTestController(t, directory, `{"probe":{"relay":{"rules":[]}}}`)
+	controller := newSyncTestController(t, directory, `{"runtime":{"kind":"ravel","protocol":"ravel-v1","relay":{"rules":[]}}}`)
 	controller.ConfigFile = configPath
 	if _, _, err := controller.Sync(); err == nil {
 		t.Fatal("response without data was accepted")
@@ -38,7 +38,7 @@ func TestSyncTreatsAuthoritativeEmptyDataAsManagedNodeRemoval(t *testing.T) {
 		"data":[],
 		"config_revision":"empty-revision",
 		"authoritative":true,
-		"probe":{"relay":{"rules":[]}}
+		"runtime":{"kind":"ravel","protocol":"ravel-v1","relay":{"rules":[]}}
 	}`)
 	writeSyncTestKey(t, controller.KeyFile)
 	existing := map[string]any{
@@ -88,7 +88,7 @@ func TestSyncDoesNotTurnFailedRevisionIntoSuccess(t *testing.T) {
 		"data":[{"ApiHost":"https://panel.example","NodeID":1,"ApiKey":"secret","Timeout":15}],
 		"config_revision":"revision-1",
 		"authoritative":true,
-		"probe":{"relay":{"rules":[]}}
+		"runtime":{"kind":"ravel","protocol":"ravel-v1","relay":{"rules":[]}}
 	}`
 	controller := newSyncTestController(t, directory, response)
 	writeSyncTestKey(t, controller.KeyFile)
@@ -132,7 +132,7 @@ func TestSyncCompletesRevisionWithoutUnnecessaryNodeReload(t *testing.T) {
 		"data":[{"ApiHost":"https://panel.example","NodeID":1,"ApiKey":"secret","Timeout":15}],
 		"config_revision":"revision-2",
 		"authoritative":true,
-		"probe":{"relay":{"rules":[]}}
+		"runtime":{"kind":"ravel","protocol":"ravel-v1","relay":{"rules":[]}}
 	}`
 	controller := newSyncTestController(t, directory, response)
 	writeSyncTestKey(t, controller.KeyFile)
