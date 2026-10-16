@@ -111,7 +111,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: YeJianbo/ravel-go
-          ref: 24138bf0c639b5fb21d7cf8268ece2d41bfdc3df
+          ref: 0e2615133e3c69f302eae2c5c90bade9bf4ac928
           path: .ravel-core
           ssh-key: ${{ secrets.RAVEL_CORE_DEPLOY_KEY }}
           persist-credentials: false
