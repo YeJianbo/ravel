@@ -41,7 +41,7 @@ func TestCloseWaitsForFinalReadCounter(t *testing.T) {
 	raw := &heldReader{entered: make(chan struct{}), interrupted: make(chan struct{}), release: make(chan struct{})}
 	var count atomic.Int64
 	r := &managedReader{reader: raw, manager: m, counter: &count}
-	w := &ManagedWriter{writer: &discardWriter{}, manager: m}
+	w := &ManagedWriter{writer: &discardWriter{}, manager: m, counter: new(atomic.Int64)}
 	m.AddLink(w, raw)
 	readDone := make(chan struct{})
 	go func() {
@@ -89,7 +89,7 @@ func TestCloseNodeWaitsWithoutStoppingOtherNodesAndCanReopen(t *testing.T) {
 	raw := &heldReader{entered: make(chan struct{}), interrupted: make(chan struct{}), release: make(chan struct{})}
 	var count atomic.Int64
 	r := &managedReader{reader: raw, manager: a, counter: &count}
-	w := &ManagedWriter{writer: &discardWriter{}, manager: a}
+	w := &ManagedWriter{writer: &discardWriter{}, manager: a, counter: new(atomic.Int64)}
 	a.AddLink(w, raw)
 	go func() { mb, _ := r.ReadMultiBuffer(); buf.ReleaseMulti(mb) }()
 	<-raw.entered
@@ -142,7 +142,8 @@ func TestConcurrentFirstLinksKeepAllCountersAndClose(t *testing.T) {
 		go func() {
 			defer workers.Done()
 			<-start
-			in, out, _, err := d.getLink(ctx)
+			inbound := *session.InboundFromContext(ctx)
+			in, out, _, err := d.getLink(session.ContextWithInbound(ctx, &inbound))
 			if err != nil {
 				failures <- err
 				return

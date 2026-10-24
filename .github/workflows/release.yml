@@ -135,7 +135,7 @@ jobs:
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
         env:
           GODEBUG: http2xconnect=1
-        run: go test ./agent ./api/v2board ./limiter ./core ./node
+        run: go test ./agent ./api/v2board ./limiter ./core ./core/app/dispatcher ./node
       - name: Get release version
         if: github.event_name == 'release' || inputs.release_tag != ''
         env:

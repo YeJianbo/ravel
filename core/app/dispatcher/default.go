@@ -13,7 +13,6 @@ import (
 	"github.com/YeJianbo/ravel/common/rate"
 	"github.com/YeJianbo/ravel/limiter"
 
-	"github.com/xtls/xray-core/app/dispatcher"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
@@ -286,8 +285,9 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 			common.Interrupt(inboundLink.Reader)
 			return nil, nil, nil, errors.New("dispatcher is closed")
 		}
+		// Raw splice bypasses the managed I/O and per-user accounting wrappers.
+		sessionInbound.CanSpliceCopy = 3
 		if w != nil {
-			sessionInbound.CanSpliceCopy = 3
 			inboundLink.Writer = rate.NewRateLimitWriter(inboundLink.Writer, w)
 			outboundLink.Writer = rate.NewRateLimitWriter(outboundLink.Writer, w)
 		}
@@ -301,18 +301,8 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 		}
 
 		ts := t.GetCounter(user.Email)
-		upcounter := &counter.XrayTrafficCounter{V: &ts.UpCounter}
-		downcounter := &counter.XrayTrafficCounter{V: &ts.DownCounter}
-		inboundLink.Writer = &dispatcher.SizeStatWriter{
-			Counter: upcounter,
-			Writer:  inboundLink.Writer,
-		}
-		outboundLink.Writer = &dispatcher.SizeStatWriter{
-			Counter: downcounter,
-			Writer:  outboundLink.Writer,
-		}
-		managedUplink := &ManagedWriter{writer: inboundLink.Writer, manager: lm}
-		managedDownlink := &ManagedWriter{writer: outboundLink.Writer, manager: lm}
+		managedUplink := &ManagedWriter{writer: inboundLink.Writer, manager: lm, counter: &ts.UpCounter}
+		managedDownlink := &ManagedWriter{writer: outboundLink.Writer, manager: lm, counter: &ts.DownCounter}
 		lm.AddLink(managedUplink, outboundLink.Reader)
 		lm.AddLink(managedDownlink, inboundLink.Reader)
 		inboundLink.Writer = managedUplink
@@ -466,8 +456,9 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			common.Interrupt(outbound.Reader)
 			return errors.New("dispatcher is closed")
 		}
+		// Raw splice bypasses the managed I/O and per-user accounting wrappers.
+		sessionInbound.CanSpliceCopy = 3
 		if w != nil {
-			sessionInbound.CanSpliceCopy = 3
 			outbound.Writer = rate.NewRateLimitWriter(outbound.Writer, w)
 		}
 		var t *counter.TrafficCounter
@@ -480,17 +471,12 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		}
 
 		ts := t.GetCounter(user.Email)
-		downcounter := &counter.XrayTrafficCounter{V: &ts.DownCounter}
 		rawReader := outbound.Reader
 		countedReader := &managedReader{reader: rawReader, manager: lm, counter: &ts.UpCounter, connection: sessionInbound.Conn}
 		outbound.Reader = &buf.TimeoutWrapperReader{
 			Reader: countedReader,
 		}
-		outbound.Writer = &dispatcher.SizeStatWriter{
-			Counter: downcounter,
-			Writer:  outbound.Writer,
-		}
-		managedWriter := &ManagedWriter{writer: outbound.Writer, manager: lm}
+		managedWriter := &ManagedWriter{writer: outbound.Writer, manager: lm, counter: &ts.DownCounter}
 		lm.AddLink(managedWriter, countedReader)
 		outbound.Writer = managedWriter
 	}

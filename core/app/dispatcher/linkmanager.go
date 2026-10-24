@@ -13,6 +13,7 @@ import (
 type ManagedWriter struct {
 	writer  buf.Writer
 	manager *LinkManager
+	counter *atomic.Int64
 }
 
 func (w *ManagedWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
@@ -21,6 +22,7 @@ func (w *ManagedWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
 		return io.ErrClosedPipe
 	}
 	defer w.manager.active.Done()
+	w.counter.Add(int64(mb.Len()))
 	return w.writer.WriteMultiBuffer(mb)
 }
 
