@@ -115,8 +115,10 @@ func (handler *ravelSafeFileHandler) ServeHTTP(writer http.ResponseWriter, reque
 
 	cleanURLPath := path.Clean("/" + request.URL.Path)
 	relative := strings.TrimPrefix(cleanURLPath, "/")
-	candidate := filepath.Join(handler.root, filepath.FromSlash(relative))
-	resolved, info, err := handler.resolveRegularFile(candidate)
+	if relative == "" {
+		relative = "."
+	}
+	file, info, err := handler.openFile(relative)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			http.NotFound(writer, request)
@@ -126,76 +128,58 @@ func (handler *ravelSafeFileHandler) ServeHTTP(writer http.ResponseWriter, reque
 		return
 	}
 	if info.IsDir() {
-		resolved, info, err = handler.resolveRegularFile(filepath.Join(resolved, "index.html"))
-		if err != nil || info.IsDir() {
+		file.Close()
+		relative = path.Join(relative, "index.html")
+		file, info, err = handler.openFile(relative)
+		if err != nil {
 			http.NotFound(writer, request)
 			return
 		}
 	}
-
-	file, err := os.Open(resolved)
-	if err != nil {
+	defer file.Close()
+	if !info.Mode().IsRegular() {
 		http.NotFound(writer, request)
 		return
 	}
-	defer file.Close()
-	if contentType := mime.TypeByExtension(filepath.Ext(resolved)); contentType != "" {
+	if contentType := mime.TypeByExtension(path.Ext(relative)); contentType != "" {
 		writer.Header().Set("Content-Type", contentType)
 	}
 	http.ServeContent(writer, request, info.Name(), info.ModTime(), file)
 }
 
-func (handler *ravelSafeFileHandler) resolveRegularFile(candidate string) (string, fs.FileInfo, error) {
-	if !ravelPathWithinRoot(handler.root, candidate) {
-		return "", nil, fs.ErrPermission
-	}
-	hasSymlink, err := ravelPathHasSymlink(handler.root, candidate)
+func (handler *ravelSafeFileHandler) openFile(relative string) (*os.File, fs.FileInfo, error) {
+	local, err := filepath.Localize(relative)
 	if err != nil {
-		return "", nil, err
+		return nil, nil, fs.ErrPermission
 	}
-	if hasSymlink {
-		return "", nil, fs.ErrPermission
-	}
-	resolved, err := filepath.EvalSymlinks(candidate)
+	root, err := os.OpenRoot(handler.root)
 	if err != nil {
-		return "", nil, err
+		return nil, nil, err
 	}
-	if !ravelPathWithinRoot(handler.root, resolved) {
-		return "", nil, fs.ErrPermission
-	}
-	info, err := os.Stat(resolved)
-	if err != nil {
-		return "", nil, err
-	}
-	return resolved, info, nil
-}
-
-func ravelPathHasSymlink(root, candidate string) (bool, error) {
-	relative, err := filepath.Rel(root, candidate)
-	if err != nil {
-		return false, err
-	}
-	current := root
-	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+	defer root.Close()
+	current := "."
+	for _, component := range strings.Split(local, string(filepath.Separator)) {
 		if component == "" || component == "." {
 			continue
 		}
 		current = filepath.Join(current, component)
-		info, err := os.Lstat(current)
+		info, err := root.Lstat(current)
 		if err != nil {
-			return false, err
+			return nil, nil, err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return true, nil
+			return nil, nil, fs.ErrPermission
 		}
 	}
-	return false, nil
-}
-
-func ravelPathWithinRoot(root, candidate string) bool {
-	relative, err := filepath.Rel(root, candidate)
+	// Root.Open also confines resolution if a component changes after Lstat.
+	file, err := root.Open(local)
 	if err != nil {
-		return false
+		return nil, nil, err
 	}
-	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, nil, err
+	}
+	return file, info, nil
 }
