@@ -111,7 +111,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: YeJianbo/ravel-go
-          ref: 2f03322fc70aeb205d283149b58b2e61956605fa
+          ref: c630a4b34423067d720bbfd3f36842327e5c3db0
           path: .ravel-core
           ssh-key: ${{ secrets.RAVEL_CORE_DEPLOY_KEY }}
           persist-credentials: false
@@ -134,7 +134,9 @@ jobs:
       - name: Test Ravel core security fixes
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
         working-directory: .ravel-core
-        run: go test ./ ./session ./internal/app -run '^(TestFrame|TestOpenAndData|TestDataFrame|TestShape|TestTextDecoder|TestVerifySignedShape|TestCleanupShape|TestSafeFile|TestReverseProxy)' -count=1
+        env:
+          GODEBUG: http2xconnect=1
+        run: go test ./ ./session ./internal/app ./gateway -run '^(TestFrame|TestOpenAndData|TestDataFrame|TestShape|TestTextDecoder|TestVerifySignedShape|TestCleanupShape|TestSafeFile|TestReverseProxy|TestServerClose)' -count=1
       - name: Test Ravel runtime
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
         env:
