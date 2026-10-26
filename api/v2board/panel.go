@@ -20,6 +20,8 @@ const ravelOverlapCapability = "ravel_credential_overlap_v1"
 // Panel is the interface for different panel's api.
 
 type Client struct {
+	certificateSync certificateSyncState
+
 	client           *resty.Client
 	APIHost          string
 	Token            string
@@ -104,7 +106,7 @@ func (c *Client) CloseIdleConnections() {
 
 func panelUserAgent() string {
 	return fmt.Sprintf(
-		"ravel go-resty/%s capability/%s capability/%s (https://github.com/go-resty/resty)",
+		"ravel go-resty/%s capability/%s capability/%s capability/node_certificate_sync_v1 (https://github.com/go-resty/resty)",
 		resty.Version,
 		ravelServerCapability,
 		ravelOverlapCapability,

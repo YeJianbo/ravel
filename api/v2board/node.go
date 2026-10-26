@@ -2,8 +2,6 @@ package panel
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -66,6 +64,8 @@ type CommonNode struct {
 	Ignore_Client_Bandwidth bool   `json:"ignore_client_bandwidth"`
 	// ravel
 	Ravel *RavelSettings `json:"ravel,omitempty"`
+
+	CertificateSyncToken string `json:"certificate_sync_token,omitempty"`
 }
 
 type RavelSettings struct {
@@ -178,6 +178,8 @@ type EncSettings struct {
 }
 
 func (c *Client) GetNodeInfo(ctx context.Context) (node *NodeInfo, err error) {
+	c.certificateSync.Lock()
+	defer c.certificateSync.Unlock()
 	const path = "/api/v2/server/config"
 	r, err := c.client.
 		R().
@@ -205,17 +207,21 @@ func (c *Client) GetNodeInfo(ctx context.Context) (node *NodeInfo, err error) {
 	if err != nil {
 		return nil, err
 	}
-	hash := sha256.Sum256(body)
-	newBodyHash := hex.EncodeToString(hash[:])
-	if c.responseBodyHash == newBodyHash {
-		c.nodeEtag = r.Header().Get("ETag")
-		return nil, nil
-	}
-
 	node, err = parseNodeInfo(body, c.APIHost, c.NodeId)
 	if err != nil {
 		return nil, err
 	}
+	newBodyHash, err := nodeConfigHash(body)
+	if err != nil {
+		return nil, err
+	}
+	if c.responseBodyHash == newBodyHash {
+		c.refreshCertificateSyncToken(node)
+		c.nodeEtag = r.Header().Get("ETag")
+		return nil, nil
+	}
+	c.certificateSync.info = node
+	c.certificateSync.token = node.Common.CertificateSyncToken
 
 	// Commit validators only after this exact body has been fully decoded and
 	// semantically validated. A bad panel response must not poison the cache.

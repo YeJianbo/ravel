@@ -38,6 +38,10 @@ type Controller struct {
 	pendingDomains          *panel.DomainTrafficBatch
 	unreportedDomains       []domaintraffic.Record
 	lastDomainReport        time.Time
+
+	certificatePublic        string
+	certificateSynced        [32]byte
+	certificateReloadPending bool
 }
 
 // NewController return a Node controller with default parameters.
@@ -165,11 +169,16 @@ func (c *Controller) Start(x *core.V2Core) error {
 		}
 	}
 	// Add new tag
+	certificate := c.captureSelfCertificate()
 	err = c.server.AddNode(c.tag, node)
 	if err != nil {
 		limiter.DeleteLimiter(c.tag)
 		c.limiter = nil
 		return fmt.Errorf("add new node error: %s", err)
+	}
+	if certificate != "" && certificate != c.captureSelfCertificate() {
+		log.WithField("tag", c.tag).Error("Certificate changed during node startup; publication disabled until reload")
+		certificate = ""
 	}
 	added, err := c.server.AddUsers(&core.AddUsersParams{
 		Tag:      c.tag,
@@ -184,7 +193,9 @@ func (c *Controller) Start(x *core.V2Core) error {
 	}
 	log.WithField("tag", c.tag).Infof("Added %d new users", added)
 	c.info = node
+	c.certificatePublic = certificate
 	c.restoreDomainCounters()
+	c.syncCertificate(context.Background())
 	c.startTasks(node)
 	return nil
 }

@@ -68,9 +68,11 @@ func (c *Controller) nodeInfoMonitor(ctx context.Context) (err error) {
 			"tag": c.tag,
 			"err": err,
 		}).Error("Get node info failed")
+		c.syncCertificate(ctx)
 		return nil
 	}
 	if newN != nil {
+		c.certificateReloadPending = true
 		log.WithFields(log.Fields{
 			"tag": c.tag,
 		}).Info("Got new node info, reload")
@@ -85,6 +87,7 @@ func (c *Controller) nodeInfoMonitor(ctx context.Context) (err error) {
 		return nil
 	}
 	log.WithField("tag", c.tag).Debug("Node info no change")
+	defer c.syncCertificate(ctx)
 
 	// get user info
 	newU, err := c.apiClient.GetUserList(ctx)

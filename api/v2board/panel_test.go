@@ -53,8 +53,8 @@ func TestPanelAuthCompatibilityAndCapability(t *testing.T) {
 	if !strings.HasPrefix(userAgent, "ravel ") || strings.Contains(strings.ToLower(userAgent), "v2node") {
 		t.Fatalf("unexpected runtime identity %q", userAgent)
 	}
-	if !strings.Contains(userAgent, ravelServerCapability) {
-		t.Fatalf("User-Agent %q does not declare %s", userAgent, ravelServerCapability)
+	if !strings.Contains(userAgent, ravelServerCapability) || !strings.Contains(userAgent, "capability/node_certificate_sync_v1") {
+		t.Fatalf("User-Agent %q does not declare required capabilities", userAgent)
 	}
 	if !strings.Contains(panelUserAgent(), ravelServerCapability) {
 		t.Fatalf("panelUserAgent() does not declare %s", ravelServerCapability)
