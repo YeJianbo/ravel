@@ -1,8 +1,615 @@
+diff --git a/common/buf/writer.go b/common/buf/writer.go
+index 6ff8a6b..1dc3628 100644
+--- a/common/buf/writer.go
++++ b/common/buf/writer.go
+@@ -1,284 +1,285 @@
+-package buf
+-
+-import (
+-	"io"
+-	"net"
+-	"sync"
+-
+-	"github.com/xtls/xray-core/common"
+-	"github.com/xtls/xray-core/common/errors"
+-	"github.com/xtls/xray-core/features/stats"
+-)
+-
+-// BufferToBytesWriter is a Writer that writes alloc.Buffer into underlying writer.
+-type BufferToBytesWriter struct {
+-	io.Writer
+-
+-	counter stats.Counter
+-	cache   [][]byte
+-}
+-
+-// WriteMultiBuffer implements Writer. This method takes ownership of the given buffer.
+-func (w *BufferToBytesWriter) WriteMultiBuffer(mb MultiBuffer) error {
+-	defer ReleaseMulti(mb)
+-
+-	size := mb.Len()
+-	if size == 0 {
+-		return nil
+-	}
+-
+-	if len(mb) == 1 {
+-		return WriteAllBytes(w.Writer, mb[0].Bytes(), w.counter)
+-	}
+-
+-	if cap(w.cache) < len(mb) {
+-		w.cache = make([][]byte, 0, len(mb))
+-	}
+-
+-	bs := w.cache
+-	for _, b := range mb {
+-		bs = append(bs, b.Bytes())
+-	}
+-
+-	defer func() {
+-		for idx := range bs {
+-			bs[idx] = nil
+-		}
+-	}()
+-
+-	nb := net.Buffers(bs)
+-	wc := int64(0)
+-	defer func() {
+-		if w.counter != nil {
+-			w.counter.Add(wc)
+-		}
+-	}()
+-	for size > 0 {
+-		n, err := nb.WriteTo(w.Writer)
+-		wc += n
+-		if err != nil {
+-			return err
+-		}
+-		size -= int32(n)
+-	}
+-
+-	return nil
+-}
+-
+-// ReadFrom implements io.ReaderFrom.
+-func (w *BufferToBytesWriter) ReadFrom(reader io.Reader) (int64, error) {
+-	var sc SizeCounter
+-	err := Copy(NewReader(reader), w, CountSize(&sc))
+-	return sc.Size, err
+-}
+-
+-// BufferedWriter is a Writer with internal buffer.
+-type BufferedWriter struct {
+-	sync.Mutex
+-	writer    Writer
+-	buffer    *Buffer
+-	buffered  bool
+-	flushNext bool
+-}
+-
+-// NewBufferedWriter creates a new BufferedWriter.
+-func NewBufferedWriter(writer Writer) *BufferedWriter {
+-	return &BufferedWriter{
+-		writer:   writer,
+-		buffer:   New(),
+-		buffered: true,
+-	}
+-}
+-
+-// WriteByte implements io.ByteWriter.
+-func (w *BufferedWriter) WriteByte(c byte) error {
+-	return common.Error2(w.Write([]byte{c}))
+-}
+-
+-// Write implements io.Writer.
+-func (w *BufferedWriter) Write(b []byte) (int, error) {
+-	if len(b) == 0 {
+-		return 0, nil
+-	}
+-
+-	w.Lock()
+-	defer w.Unlock()
+-
+-	if !w.buffered {
+-		if writer, ok := w.writer.(io.Writer); ok {
+-			return writer.Write(b)
+-		}
+-	}
+-
+-	totalBytes := 0
+-	for len(b) > 0 {
+-		if w.buffer == nil {
+-			w.buffer = New()
+-		}
+-
+-		nBytes, err := w.buffer.Write(b)
+-		totalBytes += nBytes
+-		if err != nil {
+-			return totalBytes, err
+-		}
+-		if !w.buffered || w.buffer.IsFull() {
+-			if err := w.flushInternal(); err != nil {
+-				return totalBytes, err
+-			}
+-		}
+-		b = b[nBytes:]
+-	}
+-
+-	return totalBytes, nil
+-}
+-
+-// WriteMultiBuffer implements Writer. It takes ownership of the given MultiBuffer.
+-func (w *BufferedWriter) WriteMultiBuffer(b MultiBuffer) error {
+-	if b.IsEmpty() {
+-		return nil
+-	}
+-
+-	w.Lock()
+-	defer w.Unlock()
+-
+-	if !w.buffered {
+-		return w.writer.WriteMultiBuffer(b)
+-	}
+-
+-	reader := MultiBufferContainer{
+-		MultiBuffer: b,
+-	}
+-	defer reader.Close()
+-
+-	for !reader.MultiBuffer.IsEmpty() {
+-		if w.buffer == nil {
+-			w.buffer = New()
+-		}
+-		common.Must2(w.buffer.ReadFrom(&reader))
+-		if w.buffer.IsFull() {
+-			if err := w.flushInternal(); err != nil {
+-				return err
+-			}
+-		}
+-	}
+-
+-	if w.flushNext {
+-		w.buffered = false
+-		w.flushNext = false
+-		return w.flushInternal()
+-	}
+-
+-	return nil
+-}
+-
+-// Flush flushes buffered content into underlying writer.
+-func (w *BufferedWriter) Flush() error {
+-	w.Lock()
+-	defer w.Unlock()
+-
+-	return w.flushInternal()
+-}
+-
+-func (w *BufferedWriter) flushInternal() error {
+-	if w.buffer.IsEmpty() {
+-		return nil
+-	}
+-
+-	b := w.buffer
+-	w.buffer = nil
+-
+-	if writer, ok := w.writer.(io.Writer); ok {
+-		err := WriteAllBytes(writer, b.Bytes(), nil)
+-		b.Release()
+-		return err
+-	}
+-
+-	return w.writer.WriteMultiBuffer(MultiBuffer{b})
+-}
+-
+-// SetBuffered sets whether the internal buffer is used. If set to false, Flush() will be called to clear the buffer.
+-func (w *BufferedWriter) SetBuffered(f bool) error {
+-	w.Lock()
+-	defer w.Unlock()
+-
+-	w.buffered = f
+-	if !f {
+-		return w.flushInternal()
+-	}
+-	return nil
+-}
+-
+-// SetFlushNext will wait the next WriteMultiBuffer to flush and set buffered = false
+-func (w *BufferedWriter) SetFlushNext() {
+-	w.Lock()
+-	defer w.Unlock()
+-	w.flushNext = true
+-}
+-
+-// ReadFrom implements io.ReaderFrom.
+-func (w *BufferedWriter) ReadFrom(reader io.Reader) (int64, error) {
+-	if err := w.SetBuffered(false); err != nil {
+-		return 0, err
+-	}
+-
+-	var sc SizeCounter
+-	err := Copy(NewReader(reader), w, CountSize(&sc))
+-	return sc.Size, err
+-}
+-
+-// Close implements io.Closable.
+-func (w *BufferedWriter) Close() error {
+-	if err := w.Flush(); err != nil {
+-		return err
+-	}
+-	return common.Close(w.writer)
+-}
+-
+-// SequentialWriter is a Writer that writes MultiBuffer sequentially into the underlying io.Writer.
+-type SequentialWriter struct {
+-	io.Writer
+-}
+-
+-// WriteMultiBuffer implements Writer.
+-func (w *SequentialWriter) WriteMultiBuffer(mb MultiBuffer) error {
+-	mb, err := WriteMultiBuffer(w.Writer, mb)
+-	ReleaseMulti(mb)
+-	return err
+-}
+-
+-type noOpWriter byte
+-
+-func (noOpWriter) WriteMultiBuffer(b MultiBuffer) error {
+-	ReleaseMulti(b)
+-	return nil
+-}
+-
+-func (noOpWriter) Write(b []byte) (int, error) {
+-	return len(b), nil
+-}
+-
+-func (noOpWriter) ReadFrom(reader io.Reader) (int64, error) {
+-	b := New()
+-	defer b.Release()
+-
+-	totalBytes := int64(0)
+-	for {
+-		b.Clear()
+-		_, err := b.ReadFrom(reader)
+-		totalBytes += int64(b.Len())
+-		if err != nil {
+-			if errors.Cause(err) == io.EOF {
+-				return totalBytes, nil
+-			}
+-			return totalBytes, err
+-		}
+-	}
+-}
+-
+-var (
+-	// Discard is a Writer that swallows all contents written in.
+-	Discard Writer = noOpWriter(0)
+-
+-	// DiscardBytes is an io.Writer that swallows all contents written in.
+-	DiscardBytes io.Writer = noOpWriter(0)
+-)
++package buf
++
++import (
++	"io"
++	"net"
++	"sync"
++
++	"github.com/xtls/xray-core/common"
++	"github.com/xtls/xray-core/common/errors"
++	"github.com/xtls/xray-core/features/stats"
++)
++
++// BufferToBytesWriter is a Writer that writes alloc.Buffer into underlying writer.
++type BufferToBytesWriter struct {
++	io.Writer
++
++	counter stats.Counter
++	cache   [][]byte
++}
++
++// WriteMultiBuffer implements Writer. This method takes ownership of the given buffer.
++func (w *BufferToBytesWriter) WriteMultiBuffer(mb MultiBuffer) error {
++	defer ReleaseMulti(mb)
++
++	size := mb.Len()
++	if size == 0 {
++		return nil
++	}
++
++	if len(mb) == 1 {
++		return WriteAllBytes(w.Writer, mb[0].Bytes(), w.counter)
++	}
++
++	if cap(w.cache) < len(mb) {
++		w.cache = make([][]byte, 0, len(mb))
++	}
++
++	bs := w.cache
++	for _, b := range mb {
++		bs = append(bs, b.Bytes())
++	}
++
++	defer func() {
++		for idx := range bs {
++			bs[idx] = nil
++		}
++	}()
++
++	nb := net.Buffers(bs)
++	wc := int64(0)
++	defer func() {
++		if w.counter != nil {
++			w.counter.Add(wc)
++		}
++	}()
++	for size > 0 {
++		n, err := nb.WriteTo(w.Writer)
++		wc += n
++		if err != nil {
++			return err
++		}
++		size -= int32(n)
++	}
++
++	return nil
++}
++
++// ReadFrom implements io.ReaderFrom.
++func (w *BufferToBytesWriter) ReadFrom(reader io.Reader) (int64, error) {
++	var sc SizeCounter
++	err := Copy(NewReader(reader), w, CountSize(&sc))
++	return sc.Size, err
++}
++
++// BufferedWriter is a Writer with internal buffer.
++type BufferedWriter struct {
++	sync.Mutex
++	writer    Writer
++	buffer    *Buffer
++	buffered  bool
++	flushNext bool
++}
++
++// NewBufferedWriter creates a new BufferedWriter.
++func NewBufferedWriter(writer Writer) *BufferedWriter {
++	return &BufferedWriter{
++		writer:   writer,
++		buffer:   New(),
++		buffered: true,
++	}
++}
++
++// WriteByte implements io.ByteWriter.
++func (w *BufferedWriter) WriteByte(c byte) error {
++	return common.Error2(w.Write([]byte{c}))
++}
++
++// Write implements io.Writer.
++func (w *BufferedWriter) Write(b []byte) (int, error) {
++	if len(b) == 0 {
++		return 0, nil
++	}
++
++	w.Lock()
++	defer w.Unlock()
++
++	if !w.buffered {
++		if writer, ok := w.writer.(io.Writer); ok {
++			return writer.Write(b)
++		}
++	}
++
++	totalBytes := 0
++	for len(b) > 0 {
++		if w.buffer == nil {
++			w.buffer = New()
++		}
++
++		nBytes, err := w.buffer.Write(b)
++		totalBytes += nBytes
++		// A full buffer may have accepted a prefix; flush and write the remainder.
++		if err != nil && err != ErrBufferFull {
++			return totalBytes, err
++		}
++		if !w.buffered || w.buffer.IsFull() {
++			if err := w.flushInternal(); err != nil {
++				return totalBytes, err
++			}
++		}
++		b = b[nBytes:]
++	}
++
++	return totalBytes, nil
++}
++
++// WriteMultiBuffer implements Writer. It takes ownership of the given MultiBuffer.
++func (w *BufferedWriter) WriteMultiBuffer(b MultiBuffer) error {
++	if b.IsEmpty() {
++		return nil
++	}
++
++	w.Lock()
++	defer w.Unlock()
++
++	if !w.buffered {
++		return w.writer.WriteMultiBuffer(b)
++	}
++
++	reader := MultiBufferContainer{
++		MultiBuffer: b,
++	}
++	defer reader.Close()
++
++	for !reader.MultiBuffer.IsEmpty() {
++		if w.buffer == nil {
++			w.buffer = New()
++		}
++		common.Must2(w.buffer.ReadFrom(&reader))
++		if w.buffer.IsFull() {
++			if err := w.flushInternal(); err != nil {
++				return err
++			}
++		}
++	}
++
++	if w.flushNext {
++		w.buffered = false
++		w.flushNext = false
++		return w.flushInternal()
++	}
++
++	return nil
++}
++
++// Flush flushes buffered content into underlying writer.
++func (w *BufferedWriter) Flush() error {
++	w.Lock()
++	defer w.Unlock()
++
++	return w.flushInternal()
++}
++
++func (w *BufferedWriter) flushInternal() error {
++	if w.buffer.IsEmpty() {
++		return nil
++	}
++
++	b := w.buffer
++	w.buffer = nil
++
++	if writer, ok := w.writer.(io.Writer); ok {
++		err := WriteAllBytes(writer, b.Bytes(), nil)
++		b.Release()
++		return err
++	}
++
++	return w.writer.WriteMultiBuffer(MultiBuffer{b})
++}
++
++// SetBuffered sets whether the internal buffer is used. If set to false, Flush() will be called to clear the buffer.
++func (w *BufferedWriter) SetBuffered(f bool) error {
++	w.Lock()
++	defer w.Unlock()
++
++	w.buffered = f
++	if !f {
++		return w.flushInternal()
++	}
++	return nil
++}
++
++// SetFlushNext will wait the next WriteMultiBuffer to flush and set buffered = false
++func (w *BufferedWriter) SetFlushNext() {
++	w.Lock()
++	defer w.Unlock()
++	w.flushNext = true
++}
++
++// ReadFrom implements io.ReaderFrom.
++func (w *BufferedWriter) ReadFrom(reader io.Reader) (int64, error) {
++	if err := w.SetBuffered(false); err != nil {
++		return 0, err
++	}
++
++	var sc SizeCounter
++	err := Copy(NewReader(reader), w, CountSize(&sc))
++	return sc.Size, err
++}
++
++// Close implements io.Closable.
++func (w *BufferedWriter) Close() error {
++	if err := w.Flush(); err != nil {
++		return err
++	}
++	return common.Close(w.writer)
++}
++
++// SequentialWriter is a Writer that writes MultiBuffer sequentially into the underlying io.Writer.
++type SequentialWriter struct {
++	io.Writer
++}
++
++// WriteMultiBuffer implements Writer.
++func (w *SequentialWriter) WriteMultiBuffer(mb MultiBuffer) error {
++	mb, err := WriteMultiBuffer(w.Writer, mb)
++	ReleaseMulti(mb)
++	return err
++}
++
++type noOpWriter byte
++
++func (noOpWriter) WriteMultiBuffer(b MultiBuffer) error {
++	ReleaseMulti(b)
++	return nil
++}
++
++func (noOpWriter) Write(b []byte) (int, error) {
++	return len(b), nil
++}
++
++func (noOpWriter) ReadFrom(reader io.Reader) (int64, error) {
++	b := New()
++	defer b.Release()
++
++	totalBytes := int64(0)
++	for {
++		b.Clear()
++		_, err := b.ReadFrom(reader)
++		totalBytes += int64(b.Len())
++		if err != nil {
++			if errors.Cause(err) == io.EOF {
++				return totalBytes, nil
++			}
++			return totalBytes, err
++		}
++	}
++}
++
++var (
++	// Discard is a Writer that swallows all contents written in.
++	Discard Writer = noOpWriter(0)
++
++	// DiscardBytes is an io.Writer that swallows all contents written in.
++	DiscardBytes io.Writer = noOpWriter(0)
++)
+diff --git a/common/buf/writer_partial_test.go b/common/buf/writer_partial_test.go
+new file mode 100644
+index 0000000..2d4ad2f
+--- /dev/null
++++ b/common/buf/writer_partial_test.go
+@@ -0,0 +1,27 @@
++package buf_test
++
++import (
++	"bytes"
++	. "github.com/xtls/xray-core/common/buf"
++	"testing"
++)
++
++func TestBufferedWriterContinuesAfterPartialBufferWrite(t *testing.T) {
++	var output bytes.Buffer
++	w := NewBufferedWriter(NewWriter(&output))
++	header := []byte("header!")
++	payload := bytes.Repeat([]byte{42}, Size+500)
++	if _, err := w.Write(header); err != nil {
++		t.Fatal(err)
++	}
++	if n, err := w.Write(payload); err != nil || n != len(payload) {
++		t.Fatalf("write=%d, %v", n, err)
++	}
++	if err := w.Flush(); err != nil {
++		t.Fatal(err)
++	}
++	want := append(append([]byte{}, header...), payload...)
++	if !bytes.Equal(output.Bytes(), want) {
++		t.Fatal("buffered payload was truncated")
++	}
++}
 diff --git a/proxy/anytls/session.go b/proxy/anytls/session.go
-index aea1407..7a6f1d7 100644
+index aea1407..5b8a005 100644
 --- a/proxy/anytls/session.go
 +++ b/proxy/anytls/session.go
-@@ -1,10 +1,12 @@
+@@ -1,11 +1,14 @@
  package anytls
  
  import (
@@ -13,9 +620,11 @@ index aea1407..7a6f1d7 100644
  	"encoding/hex"
 +	stderrors "errors"
  	"io"
++	"maps"
  	"strconv"
  	"strings"
-@@ -111,7 +113,7 @@ func (s *session) handleNewStream(ctx context.Context, st *stream, body buf.Mult
+ 	"sync"
+@@ -111,7 +114,7 @@ func (s *session) handleNewStream(ctx context.Context, st *stream, body buf.Mult
  			return err
  		}
  		if !body.IsEmpty() {
@@ -24,7 +633,7 @@ index aea1407..7a6f1d7 100644
  		}
  		return nil
  	} else if strings.Contains(dest.Address.String(), "udp-over-tcp.arpa") {
-@@ -142,186 +144,116 @@ func (s *session) handleNewStream(ctx context.Context, st *stream, body buf.Mult
+@@ -142,186 +145,158 @@ func (s *session) handleNewStream(ctx context.Context, st *stream, body buf.Mult
  	return nil
  }
  
@@ -40,6 +649,7 @@ index aea1407..7a6f1d7 100644
 -		}
 -		request, err := uot.ReadRequest(first)
 +const maxBufferedUoT = 2*maxFramePayload + 512
++const maxUoTDestinations = 64
 +
 +func incompleteUoT(err error) bool {
 +	return stderrors.Is(err, io.EOF) || stderrors.Is(err, io.ErrUnexpectedEOF)
@@ -67,27 +677,40 @@ index aea1407..7a6f1d7 100644
  		}
 +		st.uotRequest = request
  		st.udpIsConnect = request.IsConnect
-+		st.consumeUoTInput(len(st.uotInput) - reader.Len())
-+
- 		requestDest, err := singbridge.ToDestination(request.Destination, net.Network_UDP)
- 		if err != nil {
+-		requestDest, err := singbridge.ToDestination(request.Destination, net.Network_UDP)
+-		if err != nil {
 -			first.Release()
 -			errors.LogWarning(ctx, "anytls: UDP invalid destination, streamId=", st.sid, " err=", err)
 -			_ = s.sendFrame(newFrame(cmdFIN, st.sid))
 -			s.finishStream(st.sid, nil)
 -			return nil
-+			return s.rejectUDPStream(ctx, st, errors.New("anytls: UDP invalid destination").Base(err))
++		st.consumeUoTInput(len(st.uotInput) - reader.Len())
++
++		if request.IsConnect {
++			requestDest, err := singbridge.ToDestination(request.Destination, net.Network_UDP)
++			if err != nil {
++				return s.rejectUDPStream(ctx, st, errors.New("anytls: UDP invalid destination").Base(err))
++			}
++			link, err := s.dispatcher.Dispatch(s.dispatchContext(ctx, st), requestDest)
++			if err != nil {
++				return s.rejectUDPStream(ctx, st, errors.New("anytls: UDP dispatcher error").Base(err))
++			}
++			st.link = link
++			go s.pumpUoTDownlink(st.sid, st, link, true, request.Destination)
  		}
- 		link, err := s.dispatcher.Dispatch(s.dispatchContext(ctx, st), requestDest)
- 		if err != nil {
+-		link, err := s.dispatcher.Dispatch(s.dispatchContext(ctx, st), requestDest)
+-		if err != nil {
 -			errors.LogWarning(ctx, "anytls: UDP dispatcher error, streamId=", st.sid, " err=", err)
 -			_ = s.sendFrame(newFrame(cmdFIN, st.sid))
 -			s.finishStream(st.sid, nil)
--			return nil
-+			return s.rejectUDPStream(ctx, st, errors.New("anytls: UDP dispatcher error").Base(err))
++	}
++
++	for {
++		if len(st.uotInput) == 0 {
+ 			return nil
  		}
 -
- 		st.link = link
+-		st.link = link
 -		st.udpTarget = &requestDest
 -
 -		if !first.IsEmpty() {
@@ -130,13 +753,6 @@ index aea1407..7a6f1d7 100644
 -					errors.LogWarning(ctx, "anytls: UDP packet too short")
 -					_ = s.sendFrame(newFrame(cmdFIN, st.sid))
 -					s.finishStream(st.sid, nil)
-+		go s.pumpUoTDownlink(st.sid, st, link, request.IsConnect, request.Destination)
-+	}
-+
-+	for {
-+		if len(st.uotInput) == 0 {
-+			return nil
-+		}
 +		dest := st.uotRequest.Destination
 +		offset := 0
 +		if !st.udpIsConnect {
@@ -162,58 +778,57 @@ index aea1407..7a6f1d7 100644
 -			}
 +		if len(st.uotInput) < offset+2 {
 +			return nil
-+		}
+ 		}
+-
+-		go s.pumpUoTDownlink(st.sid, link, request.IsConnect, request.Destination)
+-		return nil
 +		length := int(binary.BigEndian.Uint16(st.uotInput[offset : offset+2]))
 +		if len(st.uotInput) < offset+2+length {
 +			return nil
- 		}
++		}
 +		if err := s.writeUoTPacket(ctx, st, dest, st.uotInput[offset+2:offset+2+length]); err != nil {
 +			return err
 +		}
 +		st.consumeUoTInput(offset + 2 + length)
-+	}
+ 	}
 +}
  
--		go s.pumpUoTDownlink(st.sid, link, request.IsConnect, request.Destination)
--		return nil
+-	if err := st.link.Writer.WriteMultiBuffer(body); err != nil {
+-		return err
 +func appendMultiBuffer(dst []byte, mb buf.MultiBuffer) []byte {
 +	for _, b := range mb {
 +		if b != nil {
 +			dst = append(dst, b.Bytes()...)
 +		}
  	}
+-	return nil
 +	buf.ReleaseMulti(mb)
 +	return dst
-+}
+ }
  
--	if err := st.link.Writer.WriteMultiBuffer(body); err != nil {
--		return err
+-func (s *session) handleUDPFrame(ctx context.Context, st *stream, body buf.MultiBuffer) error {
+-	if st.link == nil {
+-		errors.LogWarning(ctx, "anytls: UDP stream without link, streamId=", st.sid)
+-		return errors.New("anytls: UDP stream without link")
 +func (st *stream) consumeUoTInput(length int) {
 +	remaining := len(st.uotInput) - length
 +	if remaining == 0 {
 +		st.uotInput = st.uotInput[:0]
 +		return
  	}
--	return nil
-+	copy(st.uotInput, st.uotInput[length:])
-+	st.uotInput = st.uotInput[:remaining]
- }
- 
--func (s *session) handleUDPFrame(ctx context.Context, st *stream, body buf.MultiBuffer) error {
-+func (s *session) writeUoTPacket(ctx context.Context, st *stream, addr M.Socksaddr, payload []byte) error {
-+	dest, err := singbridge.ToDestination(addr, net.Network_UDP)
-+	if err != nil {
-+		return s.rejectUDPStream(ctx, st, errors.New("anytls: UDP invalid destination").Base(err))
-+	}
- 	if st.link == nil {
--		errors.LogWarning(ctx, "anytls: UDP stream without link, streamId=", st.sid)
- 		return errors.New("anytls: UDP stream without link")
- 	}
 -	var first *buf.Buffer
 -	body, first = buf.SplitFirst(body)
 -	if first == nil {
 -		return errors.New("anytls: missing destination address in PSH")
--	}
++	copy(st.uotInput, st.uotInput[length:])
++	st.uotInput = st.uotInput[:remaining]
++}
++
++func (s *session) writeUoTPacket(ctx context.Context, st *stream, addr M.Socksaddr, payload []byte) error {
++	dest, err := singbridge.ToDestination(addr, net.Network_UDP)
++	if err != nil {
++		return s.rejectUDPStream(ctx, st, errors.New("anytls: UDP invalid destination").Base(err))
+ 	}
 -	if st.udpIsConnect {
 -		var length uint16
 -		if err := binary.Read(first, binary.BigEndian, &length); err != nil {
@@ -240,14 +855,22 @@ index aea1407..7a6f1d7 100644
 -			return nil
 -		}
 -		requestDest, err := singbridge.ToDestination(dest, net.Network_UDP)
--		if err != nil {
++	link := st.link
++	if !st.udpIsConnect {
++		link, err = s.uotDestinationLink(ctx, st, dest, addr)
+ 		if err != nil {
 -			first.Release()
 -			errors.LogWarning(ctx, "anytls: UDP failed to parse request:", err)
 -			_ = s.sendFrame(newFrame(cmdFIN, st.sid))
 -			s.finishStream(st.sid, nil)
 -			return nil
--		}
--
++			return s.rejectUDPStream(ctx, st, err)
+ 		}
++	}
++	if link == nil {
++		return errors.New("anytls: UDP stream without link")
++	}
+ 
 -		if st.udpTarget == nil || st.udpTarget.String() != requestDest.String() {
 -			oldLink := st.link
 -			link, err := s.dispatcher.Dispatch(s.dispatchContext(ctx, st), requestDest)
@@ -257,6 +880,13 @@ index aea1407..7a6f1d7 100644
 -				s.finishStream(st.sid, nil)
 -				return nil
 -			}
++	b := buf.NewWithSize(int32(len(payload)))
++	if len(payload) > 0 {
++		copy(b.Extend(int32(len(payload))), payload)
++	}
++	b.UDP = &dest
++	return link.Writer.WriteMultiBuffer(buf.MultiBuffer{b})
++}
  
 -			st.link = link
 -			st.udpTarget = &requestDest
@@ -279,12 +909,36 @@ index aea1407..7a6f1d7 100644
 -		if err := st.link.Writer.WriteMultiBuffer(body); err != nil {
 -			return err
 -		}
-+	b := buf.NewWithSize(int32(len(payload)))
-+	if len(payload) > 0 {
-+		copy(b.Extend(int32(len(payload))), payload)
++func (s *session) uotDestinationLink(ctx context.Context, st *stream, dest net.Destination, addr M.Socksaddr) (*transport.Link, error) {
++	key := dest.String()
++	st.udpMu.Lock()
++	defer st.udpMu.Unlock()
++	if st.udpClosed {
++		return nil, errors.New("anytls: UDP stream closed")
  	}
-+	b.UDP = &dest
-+	return st.link.Writer.WriteMultiBuffer(buf.MultiBuffer{b})
++	if link := st.udpLinks[key]; link != nil {
++		return link, nil
++	}
++	if len(st.udpLinks) >= maxUoTDestinations {
++		return nil, errors.New("anytls: too many UDP destinations")
++	}
++	// Each destination needs its own route and mutable outbound metadata.
++	packetCtx := sessionctx.ContextWithOutbounds(s.dispatchContext(ctx, st), []*sessionctx.Outbound{{}})
++	if content := sessionctx.ContentFromContext(packetCtx); content != nil {
++		copy := *content
++		copy.Attributes = maps.Clone(content.Attributes)
++		packetCtx = sessionctx.ContextWithContent(packetCtx, &copy)
++	}
++	link, err := s.dispatcher.Dispatch(packetCtx, dest)
++	if err != nil {
++		return nil, errors.New("anytls: UDP dispatcher error").Base(err)
++	}
++	if st.udpLinks == nil {
++		st.udpLinks = make(map[string]*transport.Link)
++	}
++	st.udpLinks[key] = link
++	go s.pumpUoTDownlink(st.sid, st, link, false, addr)
++	return link, nil
 +}
  
 +func (s *session) rejectUDPStream(ctx context.Context, st *stream, err error) error {
@@ -294,7 +948,7 @@ index aea1407..7a6f1d7 100644
  	return nil
  }
  
-@@ -333,7 +265,7 @@ func (s *session) pumpDownlink(sid uint32, link *transport.Link) {
+@@ -333,7 +308,7 @@ func (s *session) pumpDownlink(sid uint32, link *transport.Link) {
  		s.streamsMu.Unlock()
  		if st != nil && st.link != nil {
  			common.Close(st.link.Writer)
@@ -303,13 +957,26 @@ index aea1407..7a6f1d7 100644
  		}
  		if !s.isClosed() {
  			_ = s.sendFrame(newFrame(cmdFIN, sid))
-@@ -352,15 +284,19 @@ func (s *session) pumpDownlink(sid uint32, link *transport.Link) {
+@@ -352,15 +327,32 @@ func (s *session) pumpDownlink(sid uint32, link *transport.Link) {
  	}
  }
  
 -func (s *session) pumpUoTDownlink(sid uint32, link *transport.Link, isConnect bool, dest M.Socksaddr) {
 +func (s *session) pumpUoTDownlink(sid uint32, st *stream, link *transport.Link, isConnect bool, dest M.Socksaddr) {
  	defer func() {
++		if !isConnect {
++			destination, err := singbridge.ToDestination(dest, net.Network_UDP)
++			if err == nil {
++				st.udpMu.Lock()
++				if st.udpLinks[destination.String()] == link {
++					delete(st.udpLinks, destination.String())
++				}
++				st.udpMu.Unlock()
++			}
++			common.Close(link.Writer)
++			common.Interrupt(link.Reader)
++			return
++		}
  		s.streamsMu.Lock()
 -		st := s.streams[sid]
 -		delete(s.streams, sid)
@@ -329,7 +996,7 @@ index aea1407..7a6f1d7 100644
  		}
  		if !s.isClosed() {
  			_ = s.sendFrame(newFrame(cmdFIN, sid))
-@@ -372,23 +308,34 @@ func (s *session) pumpUoTDownlink(sid uint32, link *transport.Link, isConnect bo
+@@ -372,23 +364,34 @@ func (s *session) pumpUoTDownlink(sid uint32, link *transport.Link, isConnect bo
  		if err != nil {
  			break
  		}
@@ -379,7 +1046,7 @@ index aea1407..7a6f1d7 100644
  				return
  			}
  		}
-@@ -622,11 +569,6 @@ func (s *session) readLoop(ctx context.Context) error {
+@@ -622,11 +625,6 @@ func (s *session) readLoop(ctx context.Context) error {
  				buf.ReleaseMulti(body)
  				s.finishStream(sid, err)
  				return nil
@@ -392,7 +1059,7 @@ index aea1407..7a6f1d7 100644
  				if err := s.handleUDPFrame(ctx, st, body); err != nil {
  					return err
 diff --git a/proxy/anytls/stream.go b/proxy/anytls/stream.go
-index 3856f87..22bc21d 100644
+index 3856f87..493506b 100644
 --- a/proxy/anytls/stream.go
 +++ b/proxy/anytls/stream.go
 @@ -4,8 +4,8 @@ import (
@@ -405,7 +1072,7 @@ index 3856f87..22bc21d 100644
  	"github.com/xtls/xray-core/transport"
  )
  
-@@ -21,8 +21,9 @@ type stream struct {
+@@ -21,8 +21,12 @@ type stream struct {
  
  	dispatchCtx  context.Context
  	isUDP        bool
@@ -413,11 +1080,25 @@ index 3856f87..22bc21d 100644
  	udpIsConnect bool
 +	uotRequest   *uot.Request
 +	uotInput     []byte
++	udpMu        sync.Mutex
++	udpLinks     map[string]*transport.Link
++	udpClosed    bool
  }
  
  func newStream(sid uint32, link *transport.Link) *stream {
-@@ -36,7 +37,7 @@ func newStream(sid uint32, link *transport.Link) *stream {
+@@ -34,9 +38,18 @@ func newStream(sid uint32, link *transport.Link) *stream {
+ }
+ 
  func (st *stream) close(err error) {
++	st.udpMu.Lock()
++	st.udpClosed = true
++	links := st.udpLinks
++	st.udpLinks = nil
++	st.udpMu.Unlock()
++	for _, link := range links {
++		common.Interrupt(link.Reader)
++		common.Close(link.Writer)
++	}
  	if st.done == nil {
  		if st.link != nil {
 -			common.Close(st.link.Reader)
@@ -425,7 +1106,7 @@ index 3856f87..22bc21d 100644
  			common.Close(st.link.Writer)
  		}
  		return
-@@ -46,7 +47,7 @@ func (st *stream) close(err error) {
+@@ -46,7 +59,7 @@ func (st *stream) close(err error) {
  		st.err = err
  		st.errMu.Unlock()
  		if st.link != nil {
@@ -436,10 +1117,10 @@ index 3856f87..22bc21d 100644
  		close(st.done)
 diff --git a/proxy/anytls/uot_regression_test.go b/proxy/anytls/uot_regression_test.go
 new file mode 100644
-index 0000000..65dceb3
+index 0000000..b0f47ae
 --- /dev/null
 +++ b/proxy/anytls/uot_regression_test.go
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,193 @@
 +package anytls
 +
 +import (
@@ -454,6 +1135,7 @@ index 0000000..65dceb3
 +	"github.com/sagernet/sing/common/uot"
 +	"github.com/xtls/xray-core/common/buf"
 +	"github.com/xtls/xray-core/common/net"
++	sessionctx "github.com/xtls/xray-core/common/session"
 +	"github.com/xtls/xray-core/features/routing"
 +	"github.com/xtls/xray-core/transport"
 +)
@@ -489,6 +1171,10 @@ index 0000000..65dceb3
 +		st := newStream(1, &transport.Link{Writer: w})
 +		st.uotRequest = &uot.Request{IsConnect: connect, Destination: dest}
 +		st.udpIsConnect = connect
++		if !connect {
++			destination := net.UDPDestination(net.ParseAddress("8.8.8.8"), 443)
++			st.udpLinks = map[string]*transport.Link{destination.String(): st.link}
++		}
 +		payloads := [][]byte{[]byte("one"), bytes.Repeat([]byte{42}, 12000), {}, []byte("last")}
 +		var wire []byte
 +		for _, p := range payloads {
@@ -553,6 +1239,45 @@ index 0000000..65dceb3
 +
 +type batchReader struct{ mb buf.MultiBuffer }
 +
++type destinationDispatcher struct {
++	routing.Dispatcher
++	allowed, blocked *packetCapture
++	contexts         []context.Context
++}
++
++func (d *destinationDispatcher) Dispatch(ctx context.Context, dest net.Destination) (*transport.Link, error) {
++	d.contexts = append(d.contexts, ctx)
++	w := d.allowed
++	if dest.Address.String() == "1.1.1.1" {
++		w = d.blocked
++	}
++	return &transport.Link{Reader: &blockedReader{done: make(chan struct{})}, Writer: w}, nil
++}
++
++func TestUoTDestinationsDispatchIndependently(t *testing.T) {
++	allowed := M.ParseSocksaddr("8.8.8.8:53")
++	blocked := M.ParseSocksaddr("1.1.1.1:53")
++	d := &destinationDispatcher{allowed: &packetCapture{}, blocked: &packetCapture{}}
++	st := newStream(1, nil)
++	defer st.close(nil)
++	s := &session{dispatcher: d, streams: map[uint32]*stream{1: st}}
++	s.closed.Store(true)
++	var wire bytes.Buffer
++	uot.WriteRequest(&wire, uot.Request{IsConnect: false, Destination: allowed})
++	wire.Write(packet([]byte("allowed"), false, allowed))
++	wire.Write(packet([]byte("blocked"), false, blocked))
++	wire.Write(packet([]byte("allowed-again"), false, allowed))
++	if err := s.handleUDPFrame(context.Background(), st, multi(wire.Bytes())); err != nil {
++		t.Fatal(err)
++	}
++	if len(d.contexts) != 2 || len(d.allowed.packets) != 2 || len(d.blocked.packets) != 1 {
++		t.Fatalf("routes reused across destinations: routes=%d allowed=%q blocked=%q", len(d.contexts), d.allowed.packets, d.blocked.packets)
++	}
++	if sessionctx.OutboundsFromContext(d.contexts[0])[0] == sessionctx.OutboundsFromContext(d.contexts[1])[0] || sessionctx.ContentFromContext(d.contexts[0]) == sessionctx.ContentFromContext(d.contexts[1]) {
++		t.Fatal("destinations share mutable routing metadata")
++	}
++}
++
 +func (r *batchReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 +	mb := r.mb
 +	r.mb = nil
@@ -587,52 +1312,5 @@ index 0000000..65dceb3
 +	}
 +	if wire.Len() != 0 {
 +		t.Fatal("unexpected extra frame")
-+	}
-+}
-diff --git a/common/buf/writer.go b/common/buf/writer.go
-index 6ff8a6b..ca06f6d 100644
---- a/common/buf/writer.go
-+++ b/common/buf/writer.go
-@@ -118,7 +118,8 @@ func (w *BufferedWriter) Write(b []byte) (int, error) {
- 
- 		nBytes, err := w.buffer.Write(b)
- 		totalBytes += nBytes
--		if err != nil {
-+		// A full buffer may have accepted a prefix; flush and write the remainder.
-+		if err != nil && err != ErrBufferFull {
- 			return totalBytes, err
- 		}
- 		if !w.buffered || w.buffer.IsFull() {
-diff --git a/common/buf/writer_partial_test.go b/common/buf/writer_partial_test.go
-new file mode 100644
-index 0000000..20fe5bc
---- /dev/null
-+++ b/common/buf/writer_partial_test.go
-@@ -0,0 +1,27 @@
-+package buf_test
-+
-+import (
-+	"bytes"
-+	. "github.com/xtls/xray-core/common/buf"
-+	"testing"
-+)
-+
-+func TestBufferedWriterContinuesAfterPartialBufferWrite(t *testing.T) {
-+	var output bytes.Buffer
-+	w := NewBufferedWriter(NewWriter(&output))
-+	header := []byte("header!")
-+	payload := bytes.Repeat([]byte{42}, Size+500)
-+	if _, err := w.Write(header); err != nil {
-+		t.Fatal(err)
-+	}
-+	if n, err := w.Write(payload); err != nil || n != len(payload) {
-+		t.Fatalf("write=%d, %v", n, err)
-+	}
-+	if err := w.Flush(); err != nil {
-+		t.Fatal(err)
-+	}
-+	want := append(append([]byte{}, header...), payload...)
-+	if !bytes.Equal(output.Bytes(), want) {
-+		t.Fatal("buffered payload was truncated")
 +	}
 +}
