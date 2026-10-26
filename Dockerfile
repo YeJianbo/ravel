@@ -6,6 +6,8 @@ COPY . .
 COPY --from=ravel_core / /ravel-go/
 ENV CGO_ENABLED=0
 ARG VERSION=dev
+RUN apk --no-cache add git
+RUN go run ./script/prepare-xray
 RUN GOEXPERIMENT=jsonv2 go mod download
 RUN GOEXPERIMENT=jsonv2 go build -trimpath -ldflags="-s -w -X github.com/YeJianbo/ravel/cmd.version=${VERSION}" -o ravel
 

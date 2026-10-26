@@ -242,6 +242,6 @@ require (
 	lukechampine.com/blake3 v1.4.1 // indirect
 )
 
-replace github.com/xtls/xray-core v1.260711.0 => github.com/wyx2685/xray-core v0.0.0-20260713170150-b17a88f9b46d
+replace github.com/xtls/xray-core v1.260711.0 => ./.xray-core
 
 replace github.com/YeJianbo/ravel-go => ../ravel-go

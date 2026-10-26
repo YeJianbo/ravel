@@ -18,8 +18,13 @@ bash ravel-install.sh --panel https://panel.example.com --machine-id 1
 仅克隆本仓库不包含该依赖；独立 CI 和容器构建也需要显式提供共享核心源码。
 
 ``` bash
+go run ./script/prepare-xray
 GOEXPERIMENT=jsonv2 go build -o build_assets/ravel -trimpath -ldflags "-X 'github.com/YeJianbo/ravel/cmd.version=$version' -s -w -buildid="
 ```
+
+`prepare-xray` 下载固定的 Xray 提交并应用仓库内的 AnyTLS UoT、通用缓冲写入修复到 `.xray-core`。
+该目录为生成依赖，不手工修改；补丁处理 UDP 包边界、半包、连接回收及缓冲区部分写入，不整体升级其他协议核心。
+首次构建需要网络及 Git，后续相同补丁可复用已生成目录。CI、CodeQL 和容器构建使用同一步骤。
 
 容器构建使用 Buildx 命名上下文提供同一份共享核心，不依赖镜像构建时拉取远端最新源码：
 

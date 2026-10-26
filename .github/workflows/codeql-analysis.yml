@@ -73,6 +73,7 @@ jobs:
       - name: Autobuild
         run: |
           go mod edit -replace=github.com/YeJianbo/ravel-go=./.ravel-core
+          go run ./script/prepare-xray
           GOEXPERIMENT=jsonv2 go build ./...
 
       # ℹ️ Command-line programs to run using the OS shell.
