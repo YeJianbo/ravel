@@ -117,6 +117,7 @@ func CollectStatus(nodeCount int) map[string]any {
 	readMemory(status)
 	readDisk(status)
 	readNetwork(status)
+	readHostResources(status)
 	return status
 }
 
